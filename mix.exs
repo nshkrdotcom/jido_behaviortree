@@ -142,10 +142,7 @@ defmodule Jido.BehaviorTree.MixProject do
   defp deps do
     [
       # Core dependencies
-      {:jido, path: "../jido"},
-      {:jido_action, path: "../jido_action", override: true},
-      {:jido_signal, path: "../jido_signal", override: true},
-      {:req_llm, github: "agentjido/req_llm", branch: "main", optional: true, override: true},
+      {:jido, "~> 2.0-rc.1", override: true},
       {:telemetry, "~> 1.3"},
       {:jason, "~> 1.4"},
 
@@ -162,7 +159,7 @@ defmodule Jido.BehaviorTree.MixProject do
 
       # Zoi and Splode
       {:zoi, "~> 0.14"},
-      {:splode, "~> 0.2"},
+      {:splode, "~> 0.3"},
 
       # Git tooling
       {:git_hooks, "~> 0.8", only: [:dev, :test], runtime: false},
