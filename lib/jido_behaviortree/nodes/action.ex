@@ -157,7 +157,7 @@ defmodule Jido.BehaviorTree.Nodes.Action do
 
     case Jido.Exec.run(instruction) do
       {:ok, result} when is_map(result) ->
-        updated_agent = Jido.Agent.Effects.apply_result(agent, result)
+        updated_agent = Jido.Agent.StateOps.apply_result(agent, result)
 
         tick =
           tick
@@ -167,8 +167,8 @@ defmodule Jido.BehaviorTree.Nodes.Action do
         {:success, %{state | result: result}, tick}
 
       {:ok, result, effects} when is_map(result) ->
-        updated_agent = Jido.Agent.Effects.apply_result(agent, result)
-        {final_agent, directives} = Jido.Agent.Effects.apply_effects(updated_agent, List.wrap(effects))
+        updated_agent = Jido.Agent.StateOps.apply_result(agent, result)
+        {final_agent, directives} = Jido.Agent.StateOps.apply_state_ops(updated_agent, List.wrap(effects))
 
         tick =
           tick
