@@ -149,11 +149,12 @@ defmodule Jido.BehaviorTree.Nodes.Action do
       Map.merge(node_context, %{state: agent.state})
       |> Map.merge(tick.context)
 
-    instruction = %Jido.Instruction{
-      action: action_module,
-      params: resolved_params,
-      context: merged_context
-    }
+    instruction =
+      Jido.Instruction.new!(%{
+        action: action_module,
+        params: resolved_params,
+        context: merged_context
+      })
 
     case Jido.Exec.run(instruction) do
       {:ok, result} when is_map(result) ->
