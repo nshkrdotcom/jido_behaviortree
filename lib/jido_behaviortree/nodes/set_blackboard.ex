@@ -63,16 +63,29 @@ defmodule Jido.BehaviorTree.Nodes.SetBlackboard do
 
   @impl true
   def tick(%__MODULE__{entries: entries} = state, tick) do
-    updated_tick =
-      Enum.reduce(entries, tick, fn {key, value}, acc ->
-        Tick.put(acc, key, value)
-      end)
+    updated_tick = apply_entries(entries, tick)
 
     {:success, %{state | updated_tick: updated_tick}}
+  end
+
+  @doc """
+  Context-aware tick variant that returns the updated tick.
+  """
+  @spec tick_with_context(t(), Tick.t()) ::
+          {Jido.BehaviorTree.Status.t(), t(), Tick.t()}
+  def tick_with_context(%__MODULE__{entries: entries} = state, tick) do
+    updated_tick = apply_entries(entries, tick)
+    {:success, %{state | updated_tick: updated_tick}, updated_tick}
   end
 
   @impl true
   def halt(state) do
     %{state | updated_tick: nil}
+  end
+
+  defp apply_entries(entries, tick) do
+    Enum.reduce(entries, tick, fn {key, value}, acc ->
+      Tick.put(acc, key, value)
+    end)
   end
 end

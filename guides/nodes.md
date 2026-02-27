@@ -133,7 +133,7 @@ action = Action.new(MyApp.Actions.ProcessData, %{
 **Behavior:**
 - Runs the action's `run/2` callback
 - `{:ok, result}` returns `:success`
-- `{:error, _}` returns `:failure`
+- `{:error, reason}` returns `{:error, reason}`
 
 ### Wait
 

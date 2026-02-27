@@ -1,7 +1,7 @@
 defmodule Jido.BehaviorTree.Nodes.AdditionalNodesTest do
   use ExUnit.Case, async: true
 
-  alias Jido.BehaviorTree.Nodes.{Wait, SetBlackboard, Succeeder, Failer, Repeat}
+  alias Jido.BehaviorTree.Nodes.{Failer, Inverter, Repeat, SetBlackboard, Succeeder, Wait}
   alias Jido.BehaviorTree.{Tick, Blackboard}
   alias Jido.BehaviorTree.Test.Nodes.{SimpleNode, FailureNode, RunningNode, ErrorNode}
 
@@ -68,6 +68,17 @@ defmodule Jido.BehaviorTree.Nodes.AdditionalNodesTest do
       halted = SetBlackboard.halt(node)
       assert halted.updated_tick == nil
     end
+
+    test "tick_with_context threads updated blackboard through returned tick" do
+      node = SetBlackboard.new(%{flag: true})
+      tick = Tick.new_with_context(Blackboard.new(), nil, [], %{})
+
+      {status, updated_node, updated_tick} = SetBlackboard.tick_with_context(node, tick)
+
+      assert status == :success
+      assert Tick.get(updated_node.updated_tick, :flag) == true
+      assert Tick.get(updated_tick, :flag) == true
+    end
   end
 
   describe "Succeeder" do
@@ -111,6 +122,16 @@ defmodule Jido.BehaviorTree.Nodes.AdditionalNodesTest do
       halted = Succeeder.halt(updated)
       assert halted.child.tick_count == 0
     end
+
+    test "tick_with_context preserves child tick blackboard updates" do
+      succeeder = Succeeder.new(SetBlackboard.new(:decorator_key, "value"))
+      tick = Tick.new_with_context(Blackboard.new(), nil, [], %{})
+
+      {status, _updated, updated_tick} = Succeeder.tick_with_context(succeeder, tick)
+
+      assert status == :success
+      assert Tick.get(updated_tick, :decorator_key) == "value"
+    end
   end
 
   describe "Failer" do
@@ -153,6 +174,28 @@ defmodule Jido.BehaviorTree.Nodes.AdditionalNodesTest do
       {_status, updated} = Failer.tick(failer, tick)
       halted = Failer.halt(updated)
       assert halted.child.tick_count == 0
+    end
+
+    test "tick_with_context preserves child tick blackboard updates" do
+      failer = Failer.new(SetBlackboard.new(:failer_key, "value"))
+      tick = Tick.new_with_context(Blackboard.new(), nil, [], %{})
+
+      {status, _updated, updated_tick} = Failer.tick_with_context(failer, tick)
+
+      assert status == :failure
+      assert Tick.get(updated_tick, :failer_key) == "value"
+    end
+  end
+
+  describe "Inverter" do
+    test "inverts success to failure and preserves context updates" do
+      inverter = Inverter.new(SetBlackboard.new(:inverter_key, "value"))
+      tick = Tick.new_with_context(Blackboard.new(), nil, [], %{})
+
+      {status, _updated, updated_tick} = Inverter.tick_with_context(inverter, tick)
+
+      assert status == :failure
+      assert Tick.get(updated_tick, :inverter_key) == "value"
     end
   end
 
@@ -216,6 +259,19 @@ defmodule Jido.BehaviorTree.Nodes.AdditionalNodesTest do
       {status, updated} = Repeat.tick(repeat, tick)
       assert status == :success
       assert updated.current_iteration == 0
+    end
+
+    test "tick_with_context preserves child tick blackboard updates across iterations" do
+      repeat = Repeat.new(SetBlackboard.new(:repeat_key, "value"), 2)
+      tick = Tick.new_with_context(Blackboard.new(), nil, [], %{})
+
+      {status1, updated1, tick1} = Repeat.tick_with_context(repeat, tick)
+      assert status1 == :running
+      assert Tick.get(tick1, :repeat_key) == "value"
+
+      {status2, _updated2, tick2} = Repeat.tick_with_context(updated1, tick1)
+      assert status2 == :success
+      assert Tick.get(tick2, :repeat_key) == "value"
     end
   end
 end

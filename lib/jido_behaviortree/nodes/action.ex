@@ -181,7 +181,7 @@ defmodule Jido.BehaviorTree.Nodes.Action do
 
       {:error, reason} ->
         tick = Tick.put(tick, :error, reason)
-        {:failure, state, tick}
+        {{:error, reason}, state, tick}
     end
   end
 
@@ -193,7 +193,7 @@ defmodule Jido.BehaviorTree.Nodes.Action do
 
       {:error, reason} ->
         tick = Tick.put(tick, :error, reason)
-        {:failure, state, tick}
+        {{:error, reason}, state, tick}
     end
   end
 

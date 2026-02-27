@@ -2,7 +2,31 @@ defmodule Jido.BehaviorTree.AgentTest do
   use ExUnit.Case, async: true
 
   alias Jido.BehaviorTree.{Agent, Tree, Blackboard}
+  alias Jido.BehaviorTree.Nodes.{Action, SetBlackboard}
   alias Jido.BehaviorTree.Test.Nodes.{SimpleNode, RunningNode, FailureNode}
+
+  defmodule RuntimeStateAction do
+    use Jido.Action,
+      name: "runtime_state_action",
+      description: "Mutates Jido agent state and emits a directive"
+
+    @impl true
+    def run(_params, _context) do
+      signal = Jido.Signal.new!("jido.bt.test", %{ok: true}, source: "/bt/test")
+
+      {:ok, %{result_flag: true},
+       [
+         Jido.Agent.StateOp.set_state(%{status: :effect_applied}),
+         Jido.Agent.Directive.emit(signal)
+       ]}
+    end
+  end
+
+  defmodule RuntimeContextAgent do
+    use Jido.Agent,
+      name: "bt_runtime_context_agent",
+      schema: [status: [type: :atom, default: :idle]]
+  end
 
   describe "Agent.start_link/1" do
     test "starts agent with simple tree" do
@@ -60,6 +84,52 @@ defmodule Jido.BehaviorTree.AgentTest do
 
       GenServer.stop(agent)
     end
+
+    test "returns validation error when :tree is missing" do
+      assert {:error, %Jido.BehaviorTree.Error.BehaviorTreeError{} = error} = Agent.start_link([])
+      assert error.class == :invalid
+      assert error.message =~ "Missing required :tree option"
+    end
+
+    test "returns validation error for invalid mode" do
+      tree = Tree.new(SimpleNode.new("test"))
+
+      assert {:error, %Jido.BehaviorTree.Error.BehaviorTreeError{} = error} =
+               Agent.start_link(tree: tree, mode: :invalid)
+
+      assert error.class == :invalid
+      assert error.details.mode == :invalid
+    end
+
+    test "returns validation error for invalid interval" do
+      tree = Tree.new(SimpleNode.new("test"))
+
+      assert {:error, %Jido.BehaviorTree.Error.BehaviorTreeError{} = error} =
+               Agent.start_link(tree: tree, interval: -1)
+
+      assert error.class == :invalid
+      assert error.details.interval == -1
+    end
+
+    test "returns validation error for non-map blackboard" do
+      tree = Tree.new(SimpleNode.new("test"))
+
+      assert {:error, %Jido.BehaviorTree.Error.BehaviorTreeError{} = error} =
+               Agent.start_link(tree: tree, blackboard: :not_a_map)
+
+      assert error.class == :invalid
+      assert error.details.blackboard == :not_a_map
+    end
+
+    test "returns validation error for non-agent jido_agent option" do
+      tree = Tree.new(SimpleNode.new("test"))
+
+      assert {:error, %Jido.BehaviorTree.Error.BehaviorTreeError{} = error} =
+               Agent.start_link(tree: tree, jido_agent: :invalid)
+
+      assert error.class == :invalid
+      assert error.details.jido_agent == :invalid
+    end
   end
 
   describe "Agent.tick/1" do
@@ -116,6 +186,61 @@ defmodule Jido.BehaviorTree.AgentTest do
 
       status = Agent.tick(agent)
       assert status == :failure
+
+      GenServer.stop(agent)
+    end
+
+    test "persists blackboard writes from SetBlackboard node" do
+      tree = Tree.new(SetBlackboard.new(:status, :ready))
+      {:ok, agent} = Agent.start_link(tree: tree)
+
+      assert :success = Agent.tick(agent)
+      assert :ready == Agent.get(agent, :status)
+
+      GenServer.stop(agent)
+    end
+
+    test "applies Jido agent state ops and captures directives when jido_agent is configured" do
+      jido_agent = RuntimeContextAgent.new()
+      tree = Tree.new(Action.new(RuntimeStateAction))
+
+      {:ok, agent} = Agent.start_link(tree: tree, jido_agent: jido_agent)
+
+      assert :success = Agent.tick(agent)
+
+      updated_jido_agent = Agent.jido_agent(agent)
+      assert %Jido.Agent{} = updated_jido_agent
+      assert updated_jido_agent.state.status == :effect_applied
+      assert Agent.get(agent, :last_result) == %{result_flag: true}
+
+      directives = Agent.directives(agent)
+      assert length(directives) == 1
+      assert match?([%Jido.Agent.Directive.Emit{}], directives)
+
+      GenServer.stop(agent)
+    end
+  end
+
+  describe "Agent.status/1" do
+    test "returns idle before first tick and latest status after ticking" do
+      tree = Tree.new(SimpleNode.new("status"))
+      {:ok, agent} = Agent.start_link(tree: tree)
+
+      assert :idle == Agent.status(agent)
+      assert :success == Agent.tick(agent)
+      assert :success == Agent.status(agent)
+
+      GenServer.stop(agent)
+    end
+  end
+
+  describe "Agent.jido_agent/1 and Agent.directives/1" do
+    test "returns nil agent context and empty directives before first tick by default" do
+      tree = Tree.new(SimpleNode.new("defaults"))
+      {:ok, agent} = Agent.start_link(tree: tree)
+
+      assert Agent.jido_agent(agent) == nil
+      assert Agent.directives(agent) == []
 
       GenServer.stop(agent)
     end
@@ -229,6 +354,19 @@ defmodule Jido.BehaviorTree.AgentTest do
 
       GenServer.stop(agent)
     end
+
+    test "returns validation error for invalid mode and keeps existing mode" do
+      tree = Tree.new(SimpleNode.new("test"))
+      {:ok, agent} = Agent.start_link(tree: tree, mode: :manual)
+
+      assert {:error, %Jido.BehaviorTree.Error.BehaviorTreeError{} = error} =
+               Agent.set_mode(agent, :invalid)
+
+      assert error.class == :invalid
+      assert Agent.mode(agent) == :manual
+
+      GenServer.stop(agent)
+    end
   end
 
   describe "Auto mode execution" do
@@ -246,6 +384,18 @@ defmodule Jido.BehaviorTree.AgentTest do
 
       # Wait for a few automatic ticks
       Process.sleep(150)
+
+      GenServer.stop(agent)
+    end
+
+    test "ignores internal :tick messages when in manual mode" do
+      tree = Tree.new(SimpleNode.new("test"))
+      {:ok, agent} = Agent.start_link(tree: tree, mode: :manual)
+
+      send(agent, :tick)
+      Process.sleep(20)
+
+      assert Agent.status(agent) == :idle
 
       GenServer.stop(agent)
     end

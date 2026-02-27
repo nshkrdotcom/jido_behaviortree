@@ -81,6 +81,30 @@ defmodule Jido.BehaviorTree.Nodes.SelectorTest do
     end
   end
 
+  describe "tick_with_context/2" do
+    test "returns success when a later child succeeds" do
+      children = [FailureNode.new(), SimpleNode.new("ok")]
+      selector = Selector.new(children)
+      tick = Tick.new_with_context(Blackboard.new(), nil, [], %{})
+
+      {status, _updated, updated_tick} = Selector.tick_with_context(selector, tick)
+
+      assert status == :success
+      assert updated_tick == tick
+    end
+
+    test "returns running and preserves index for running child" do
+      children = [FailureNode.new(), RunningNode.new(2), SimpleNode.new()]
+      selector = Selector.new(children)
+      tick = Tick.new_with_context(Blackboard.new(), nil, [], %{})
+
+      {status, updated, _updated_tick} = Selector.tick_with_context(selector, tick)
+
+      assert status == :running
+      assert updated.current_index == 1
+    end
+  end
+
   describe "halt/1" do
     test "halts all children and resets index" do
       children = [SimpleNode.new(), SimpleNode.new()]

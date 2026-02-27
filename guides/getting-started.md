@@ -73,6 +73,24 @@ For stateful execution across multiple ticks:
 status = BehaviorTree.Agent.tick(agent)
 ```
 
+## Using Jido AgentServer Strategy Mode
+
+For production Jido integration (signal routing, directives, snapshots), use
+`Jido.Agent.Strategy.BehaviorTree` with a `Jido.Agent` module:
+
+```elixir
+defmodule MyApp.BTAgent do
+  use Jido.Agent,
+    name: "my_bt_agent",
+    strategy: {Jido.Agent.Strategy.BehaviorTree, tree: tree}
+end
+
+{:ok, pid} = Jido.AgentServer.start_link(agent: MyApp.BTAgent)
+
+signal = Jido.Signal.new!("jido.bt.tick", %{}, source: "/myapp")
+{:ok, _agent} = Jido.AgentServer.call(pid, signal)
+```
+
 ## Key Concepts
 
 ### The Blackboard
@@ -98,6 +116,7 @@ Every node returns one of these statuses:
 - `:success` - Node completed successfully
 - `:failure` - Node failed
 - `:running` - Node is still executing (will be ticked again)
+- `{:error, reason}` - Node raised an execution error
 
 ### Tick Context
 
@@ -105,5 +124,6 @@ The tick context tracks execution state:
 
 ```elixir
 tick = BehaviorTree.tick()
-# Contains: tree reference, blackboard, open nodes, tick count
+# Contains: blackboard, timestamp, sequence
+# In strategy/context mode it also carries agent, directives, and context metadata
 ```

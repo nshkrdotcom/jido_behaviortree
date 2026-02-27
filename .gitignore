@@ -21,6 +21,8 @@ jido_behaviortree-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+/coveralls.json
+.DS_Store
 
 # Dialyzer PLT files
 /priv/plts/*.plt

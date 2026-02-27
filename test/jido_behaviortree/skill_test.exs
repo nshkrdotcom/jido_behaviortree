@@ -2,7 +2,19 @@ defmodule Jido.BehaviorTree.SkillTest do
   use ExUnit.Case, async: true
 
   alias Jido.BehaviorTree.{Skill, Tree}
+  alias Jido.BehaviorTree.Nodes.{Action, Wait}
   alias Jido.BehaviorTree.Test.Nodes.{SimpleNode, FailureNode}
+
+  defmodule AlwaysErrorAction do
+    use Jido.Action,
+      name: "always_error",
+      description: "Returns an error"
+
+    @impl true
+    def run(_params, _context) do
+      {:error, :forced_error}
+    end
+  end
 
   describe "Skill.new/4" do
     test "creates skill with minimal options" do
@@ -116,10 +128,9 @@ defmodule Jido.BehaviorTree.SkillTest do
 
       skill = Skill.new("failing_skill", tree, "", timeout: 1000)
 
-      # Failure is a valid completion state, not an error
-      # The skill should complete successfully even if the tree returns :failure
-      {:ok, result} = Skill.run(skill, %{}, %{})
-      assert is_map(result)
+      {:error, reason} = Skill.run(skill, %{}, %{})
+      assert %Jido.BehaviorTree.Error.BehaviorTreeError{} = reason
+      assert reason.message == "Behavior tree failed"
     end
 
     test "validates output with output schema" do
@@ -195,7 +206,7 @@ defmodule Jido.BehaviorTree.SkillTest do
   end
 
   describe "Auto mode execution" do
-    test "executes in auto mode with timeout" do
+    test "completes in auto mode before timeout when tree terminates early" do
       node = SimpleNode.new("test")
       tree = Tree.new(node)
 
@@ -205,17 +216,25 @@ defmodule Jido.BehaviorTree.SkillTest do
           tree,
           "",
           auto_mode: true,
-          # Short timeout for testing
-          timeout: 100
+          timeout: 500,
+          interval: 5
         )
 
       start_time = System.monotonic_time(:millisecond)
       {:ok, _result} = Skill.run(skill, %{}, %{})
       end_time = System.monotonic_time(:millisecond)
 
-      # Should have taken at least the timeout duration
       duration = end_time - start_time
-      assert duration >= 100
+      assert duration < 500
+    end
+
+    test "returns timeout error in auto mode when tree never completes" do
+      tree = Tree.new(Wait.new(1_000))
+      skill = Skill.new("auto_timeout", tree, "", auto_mode: true, timeout: 50, interval: 5)
+
+      {:error, reason} = Skill.run(skill, %{}, %{})
+      assert %Jido.BehaviorTree.Error.BehaviorTreeError{} = reason
+      assert reason.message == "Execution timed out"
     end
   end
 
@@ -240,6 +259,25 @@ defmodule Jido.BehaviorTree.SkillTest do
       # Should complete quickly since SimpleNode succeeds immediately
       duration = end_time - start_time
       assert duration < 1000
+    end
+
+    test "returns timeout error in manual mode when tree does not finish" do
+      tree = Tree.new(Wait.new(1_000))
+      skill = Skill.new("manual_timeout", tree, "", auto_mode: false, timeout: 50)
+
+      {:error, reason} = Skill.run(skill, %{}, %{})
+      assert %Jido.BehaviorTree.Error.BehaviorTreeError{} = reason
+      assert reason.message == "Execution timed out"
+    end
+
+    test "returns error when action node errors" do
+      tree = Tree.new(Action.new(AlwaysErrorAction))
+      skill = Skill.new("action_error_skill", tree, "", auto_mode: false, timeout: 1_000)
+
+      {:error, reason} = Skill.run(skill, %{}, %{})
+      assert %Jido.BehaviorTree.Error.BehaviorTreeError{} = reason
+      assert reason.message == "Behavior tree error"
+      assert match?(%Jido.Action.Error.ExecutionFailureError{}, reason.details.reason)
     end
   end
 end

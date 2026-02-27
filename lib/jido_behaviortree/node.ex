@@ -12,17 +12,17 @@ defmodule Jido.BehaviorTree.Node do
   1. **Composite Nodes** - Control the execution of multiple child nodes
      - Sequence: Execute children in order until one fails
      - Selector: Execute children in order until one succeeds
-     - Parallel: Execute children concurrently
 
   2. **Decorator Nodes** - Modify the behavior of a single child node
      - Inverter: Invert the child's success/failure status
+     - Succeeder: Convert completion to success
+     - Failer: Convert completion to failure
      - Repeat: Repeat the child a specified number of times
-     - Timeout: Limit the child's execution time
 
   3. **Leaf Nodes** - Perform actual work or conditions
      - Action: Execute a Jido action
      - Wait: Pause execution for a duration
-     - Condition: Check a boolean condition
+     - SetBlackboard: Write values into the tick blackboard
 
   ## Implementation
 

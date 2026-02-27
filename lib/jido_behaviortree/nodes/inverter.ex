@@ -63,6 +63,24 @@ defmodule Jido.BehaviorTree.Nodes.Inverter do
     {inverted_status, %{state | child: updated_child}}
   end
 
+  @doc """
+  Context-aware tick that preserves child tick mutations.
+  """
+  @spec tick_with_context(t(), Jido.BehaviorTree.Tick.t()) ::
+          {Jido.BehaviorTree.Status.t(), t(), Jido.BehaviorTree.Tick.t()}
+  def tick_with_context(%__MODULE__{child: child} = state, tick) do
+    {status, updated_child, updated_tick} = Node.execute_tick_with_context(child, tick)
+
+    inverted_status =
+      case status do
+        :success -> :failure
+        :failure -> :success
+        other -> other
+      end
+
+    {inverted_status, %{state | child: updated_child}, updated_tick}
+  end
+
   @impl true
   def halt(%__MODULE__{child: child} = state) do
     halted_child = Node.execute_halt(child)

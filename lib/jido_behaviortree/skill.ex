@@ -193,24 +193,29 @@ defmodule Jido.BehaviorTree.Skill do
     case Agent.start_link(agent_opts) do
       {:ok, agent} ->
         try do
-          _result =
+          execution_status =
             if skill.auto_mode do
               execute_auto_mode(agent, skill.timeout)
             else
               execute_manual_mode(agent, skill.timeout)
             end
 
-          final_blackboard = Agent.blackboard(agent)
+          case execution_status do
+            :success ->
+              final_blackboard = Agent.blackboard(agent)
+              {:ok, Blackboard.to_map(final_blackboard)}
 
-          Agent.halt(agent)
-          GenServer.stop(agent)
+            :failure ->
+              {:error, Error.execution_error("Behavior tree failed")}
 
-          {:ok, Blackboard.to_map(final_blackboard)}
+            {:error, reason} ->
+              {:error, reason}
+          end
         rescue
           error ->
-            Agent.halt(agent)
-            GenServer.stop(agent)
             {:error, Error.execution_error("Execution failed: #{Exception.message(error)}")}
+        after
+          shutdown_agent(agent)
         end
 
       {:error, reason} ->
@@ -218,9 +223,30 @@ defmodule Jido.BehaviorTree.Skill do
     end
   end
 
-  defp execute_auto_mode(_agent, timeout) do
-    Process.sleep(timeout)
-    :ok
+  defp execute_auto_mode(agent, timeout) do
+    end_time = System.monotonic_time(:millisecond) + timeout
+    execute_auto_loop(agent, end_time)
+  end
+
+  defp execute_auto_loop(agent, end_time) do
+    if System.monotonic_time(:millisecond) > end_time do
+      {:error, Error.execution_error("Execution timed out")}
+    else
+      case Agent.status(agent) do
+        :success ->
+          :success
+
+        :failure ->
+          :failure
+
+        {:error, reason} ->
+          {:error, Error.execution_error("Behavior tree error", %{reason: reason})}
+
+        _ ->
+          Process.sleep(10)
+          execute_auto_loop(agent, end_time)
+      end
+    end
   end
 
   defp execute_manual_mode(agent, timeout) do
@@ -234,10 +260,10 @@ defmodule Jido.BehaviorTree.Skill do
     else
       case Agent.tick(agent) do
         :success ->
-          :ok
+          :success
 
         :failure ->
-          :ok
+          :failure
 
         {:error, reason} ->
           {:error, Error.execution_error("Behavior tree error", %{reason: reason})}
@@ -259,5 +285,24 @@ defmodule Jido.BehaviorTree.Skill do
         formatted = Jido.Action.Schema.format_error(error, "Skill output", __MODULE__)
         {:error, formatted}
     end
+  end
+
+  defp shutdown_agent(agent) when is_pid(agent) do
+    if Process.alive?(agent) do
+      safe_halt(agent)
+      safe_stop(agent)
+    end
+  end
+
+  defp safe_halt(agent) do
+    Agent.halt(agent)
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp safe_stop(agent) do
+    GenServer.stop(agent)
+  catch
+    :exit, _ -> :ok
   end
 end

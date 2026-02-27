@@ -72,6 +72,30 @@ defmodule Jido.BehaviorTree.Nodes.SequenceTest do
     end
   end
 
+  describe "tick_with_context/2" do
+    test "threads updated tick and returns success when all children succeed" do
+      children = [SimpleNode.new("a"), SimpleNode.new("b")]
+      sequence = Sequence.new(children)
+      tick = Tick.new_with_context(Blackboard.new(), nil, [], %{})
+
+      {status, _updated, updated_tick} = Sequence.tick_with_context(sequence, tick)
+
+      assert status == :success
+      assert updated_tick == tick
+    end
+
+    test "returns running with current index when child is running" do
+      children = [SimpleNode.new(), RunningNode.new(3), SimpleNode.new()]
+      sequence = Sequence.new(children)
+      tick = Tick.new_with_context(Blackboard.new(), nil, [], %{})
+
+      {status, updated, _updated_tick} = Sequence.tick_with_context(sequence, tick)
+
+      assert status == :running
+      assert updated.current_index == 1
+    end
+  end
+
   describe "halt/1" do
     test "halts all children and resets index" do
       children = [SimpleNode.new(), SimpleNode.new()]

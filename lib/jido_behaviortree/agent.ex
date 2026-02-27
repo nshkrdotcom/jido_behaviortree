@@ -35,7 +35,8 @@ defmodule Jido.BehaviorTree.Agent do
   use GenServer
   require Logger
 
-  alias Jido.BehaviorTree.{Tree, Tick, Blackboard, Status}
+  alias Jido.Agent, as: JidoAgent
+  alias Jido.BehaviorTree.{Tree, Tick, Blackboard, Error, Status}
 
   @typedoc "Agent execution mode"
   @type mode :: :manual | :auto
@@ -44,6 +45,9 @@ defmodule Jido.BehaviorTree.Agent do
   @type state :: %{
           tree: Tree.t(),
           blackboard: Blackboard.t(),
+          jido_agent: JidoAgent.t() | nil,
+          last_directives: [JidoAgent.directive()],
+          last_status: :idle | Status.t(),
           mode: mode(),
           interval: non_neg_integer() | nil,
           timer_ref: reference() | nil,
@@ -51,6 +55,7 @@ defmodule Jido.BehaviorTree.Agent do
         }
 
   @default_interval 1000
+  @valid_modes [:manual, :auto]
 
   ## Public API
 
@@ -61,6 +66,7 @@ defmodule Jido.BehaviorTree.Agent do
 
   - `:tree` - The behavior tree to execute (required)
   - `:blackboard` - Initial blackboard data (default: empty blackboard)
+  - `:jido_agent` - Optional `%Jido.Agent{}` for Action-node state/directive integration
   - `:mode` - Execution mode, either `:manual` or `:auto` (default: `:manual`)
   - `:interval` - Tick interval in milliseconds for auto mode (default: 1000)
 
@@ -74,25 +80,34 @@ defmodule Jido.BehaviorTree.Agent do
       )
 
   """
-  @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    tree = Keyword.fetch!(opts, :tree)
-    blackboard_data = Keyword.get(opts, :blackboard, %{})
-    mode = Keyword.get(opts, :mode, :manual)
-    interval = Keyword.get(opts, :interval, @default_interval)
+    with {:ok, tree} <- fetch_tree(opts),
+         :ok <- validate_mode(opts),
+         :ok <- validate_interval(opts),
+         :ok <- validate_blackboard(opts),
+         :ok <- validate_jido_agent(opts) do
+      blackboard_data = Keyword.get(opts, :blackboard, %{})
+      jido_agent = Keyword.get(opts, :jido_agent)
+      mode = Keyword.get(opts, :mode, :manual)
+      interval = Keyword.get(opts, :interval, @default_interval)
 
-    initial_state = %{
-      tree: tree,
-      blackboard: Blackboard.new(blackboard_data),
-      mode: mode,
-      interval: interval,
-      timer_ref: nil,
-      tick_count: 0
-    }
+      initial_state = %{
+        tree: tree,
+        blackboard: Blackboard.new(blackboard_data),
+        jido_agent: jido_agent,
+        last_directives: [],
+        last_status: :idle,
+        mode: mode,
+        interval: interval,
+        timer_ref: nil,
+        tick_count: 0
+      }
 
-    # Filter out custom options, keeping only GenServer-compatible ones
-    genserver_opts = Keyword.drop(opts, [:tree, :blackboard, :mode, :interval])
-    GenServer.start_link(__MODULE__, initial_state, genserver_opts)
+      # Filter out custom options, keeping only GenServer-compatible ones
+      genserver_opts = Keyword.drop(opts, [:tree, :blackboard, :jido_agent, :mode, :interval])
+      GenServer.start_link(__MODULE__, initial_state, genserver_opts)
+    end
   end
 
   @doc """
@@ -150,6 +165,32 @@ defmodule Jido.BehaviorTree.Agent do
   end
 
   @doc """
+  Gets the status from the most recent tick.
+
+  Returns `:idle` before the first tick.
+  """
+  @spec status(pid()) :: :idle | Status.t()
+  def status(pid) do
+    GenServer.call(pid, :status)
+  end
+
+  @doc """
+  Gets the current Jido agent context (if configured).
+  """
+  @spec jido_agent(pid()) :: JidoAgent.t() | nil
+  def jido_agent(pid) do
+    GenServer.call(pid, :jido_agent)
+  end
+
+  @doc """
+  Gets directives emitted on the most recent tick.
+  """
+  @spec directives(pid()) :: [JidoAgent.directive()]
+  def directives(pid) do
+    GenServer.call(pid, :directives)
+  end
+
+  @doc """
   Replaces the root node of the tree.
 
   ## Examples
@@ -193,13 +234,14 @@ defmodule Jido.BehaviorTree.Agent do
 
   When changing to `:auto` mode, automatic ticking will start.
   When changing to `:manual` mode, automatic ticking will stop.
+  Returns a validation error when mode is not `:manual` or `:auto`.
 
   ## Examples
 
       :ok = Jido.BehaviorTree.Agent.set_mode(agent, :auto)
 
   """
-  @spec set_mode(pid(), mode()) :: :ok
+  @spec set_mode(pid(), mode()) :: :ok | {:error, Error.BehaviorTreeError.t()}
   def set_mode(pid, new_mode) do
     GenServer.call(pid, {:set_mode, new_mode})
   end
@@ -242,6 +284,18 @@ defmodule Jido.BehaviorTree.Agent do
     {:reply, :ok, new_state}
   end
 
+  def handle_call(:status, _from, state) do
+    {:reply, state.last_status, state}
+  end
+
+  def handle_call(:jido_agent, _from, state) do
+    {:reply, state.jido_agent, state}
+  end
+
+  def handle_call(:directives, _from, state) do
+    {:reply, state.last_directives, state}
+  end
+
   def handle_call(:halt, _from, state) do
     halted_tree = Tree.halt(state.tree)
     new_state = %{state | tree: halted_tree}
@@ -252,7 +306,7 @@ defmodule Jido.BehaviorTree.Agent do
     {:reply, state.mode, state}
   end
 
-  def handle_call({:set_mode, new_mode}, _from, state) do
+  def handle_call({:set_mode, new_mode}, _from, state) when new_mode in @valid_modes do
     new_state =
       case {state.mode, new_mode} do
         {:manual, :auto} ->
@@ -268,7 +322,21 @@ defmodule Jido.BehaviorTree.Agent do
     {:reply, :ok, new_state}
   end
 
+  def handle_call({:set_mode, new_mode}, _from, state) do
+    error =
+      Error.validation_error("Invalid mode for behavior tree agent", %{
+        mode: new_mode,
+        valid_modes: @valid_modes
+      })
+
+    {:reply, {:error, error}, state}
+  end
+
   @impl true
+  def handle_info(:tick, %{mode: :manual} = state) do
+    {:noreply, %{state | timer_ref: nil}}
+  end
+
   def handle_info(:tick, state) do
     {_status, new_state} = do_tick(state)
 
@@ -296,35 +364,39 @@ defmodule Jido.BehaviorTree.Agent do
   defp do_tick(state) do
     start_time = System.monotonic_time()
 
-    # Create tick context
-    tick = Tick.new(state.blackboard)
+    # Use context-aware tick execution so blackboard writes are preserved
+    tick = Tick.new_with_context(state.blackboard, state.jido_agent, [], %{})
+    tick = %{tick | sequence: state.tick_count}
 
     # Emit telemetry
     :telemetry.execute(
-      [:jido_behaviortree, :agent, :tick, :start],
+      [:jido, :bt, :agent, :tick, :start],
       %{},
       %{tick_count: state.tick_count}
     )
 
     # Execute the tree
-    {status, updated_tree} = Tree.tick(state.tree, tick)
-
-    # Extract updated blackboard from tick
-    updated_blackboard = tick.blackboard
+    {status, updated_tree, updated_tick} = Tree.tick_with_context(state.tree, tick)
+    updated_blackboard = updated_tick.blackboard
+    updated_jido_agent = updated_tick.agent || state.jido_agent
+    directives = updated_tick.directives
 
     duration = System.monotonic_time() - start_time
 
     # Emit completion telemetry
     :telemetry.execute(
-      [:jido_behaviortree, :agent, :tick, :stop],
+      [:jido, :bt, :agent, :tick, :stop],
       %{duration: duration},
-      %{tick_count: state.tick_count, status: status}
+      %{tick_count: state.tick_count, status: status, directives_count: length(directives)}
     )
 
     new_state = %{
       state
       | tree: updated_tree,
         blackboard: updated_blackboard,
+        jido_agent: updated_jido_agent,
+        last_directives: directives,
+        last_status: status,
         tick_count: state.tick_count + 1
     }
 
@@ -342,5 +414,77 @@ defmodule Jido.BehaviorTree.Agent do
     end
 
     %{state | timer_ref: nil}
+  end
+
+  defp fetch_tree(opts) do
+    case Keyword.fetch(opts, :tree) do
+      {:ok, %Tree{} = tree} ->
+        {:ok, tree}
+
+      {:ok, tree} ->
+        {:error,
+         Error.validation_error("Expected :tree to be a Jido.BehaviorTree.Tree struct", %{
+           tree: tree
+         })}
+
+      :error ->
+        {:error, Error.validation_error("Missing required :tree option")}
+    end
+  end
+
+  defp validate_mode(opts) do
+    mode = Keyword.get(opts, :mode, :manual)
+
+    if mode in @valid_modes do
+      :ok
+    else
+      {:error,
+       Error.validation_error("Invalid mode for behavior tree agent", %{
+         mode: mode,
+         valid_modes: @valid_modes
+       })}
+    end
+  end
+
+  defp validate_interval(opts) do
+    interval = Keyword.get(opts, :interval, @default_interval)
+
+    if is_integer(interval) and interval >= 0 do
+      :ok
+    else
+      {:error,
+       Error.validation_error("Expected :interval to be a non-negative integer", %{
+         interval: interval
+       })}
+    end
+  end
+
+  defp validate_blackboard(opts) do
+    blackboard = Keyword.get(opts, :blackboard, %{})
+
+    if is_map(blackboard) do
+      :ok
+    else
+      {:error,
+       Error.validation_error("Expected :blackboard to be a map", %{
+         blackboard: blackboard
+       })}
+    end
+  end
+
+  defp validate_jido_agent(opts) do
+    case Keyword.get(opts, :jido_agent) do
+      nil ->
+        :ok
+
+      %JidoAgent{} ->
+        :ok
+
+      jido_agent ->
+        {:error,
+         Error.validation_error("Expected :jido_agent to be a Jido.Agent struct", %{
+           jido_agent: jido_agent
+         })}
+    end
   end
 end

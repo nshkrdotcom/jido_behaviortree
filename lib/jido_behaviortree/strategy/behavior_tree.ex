@@ -43,11 +43,56 @@ defmodule Jido.Agent.Strategy.BehaviorTree do
   use Jido.Agent.Strategy
 
   alias Jido.Agent
-  alias Jido.Agent.Directive
+  alias Jido.Agent.Directive, as: AgentDirective
   alias Jido.Agent.Strategy.State, as: StratState
   alias Jido.BehaviorTree.{Blackboard, Tick, Tree}
   alias Jido.Error
-  alias Jido.Telemetry, as: JidoTelemetry
+  alias Jido.Instruction
+  alias Jido.Observe
+
+  @tick_action :bt_tick
+  @put_action :bt_blackboard_put
+  @merge_action :bt_blackboard_merge
+  @halt_action :bt_halt
+  @reset_action :bt_reset
+
+  @action_specs %{
+    @tick_action => %{
+      schema:
+        Zoi.object(%{
+          instructions: Zoi.list(Zoi.any(), description: "Additional instructions to inject") |> Zoi.optional()
+        }),
+      doc: "Execute a single behavior tree tick",
+      name: "jido.bt.tick"
+    },
+    @put_action => %{
+      schema:
+        Zoi.object(%{
+          key: Zoi.any(description: "Blackboard key to set"),
+          value: Zoi.any(description: "Value to store")
+        }),
+      doc: "Set one key/value on the behavior tree blackboard",
+      name: "jido.bt.blackboard.put"
+    },
+    @merge_action => %{
+      schema:
+        Zoi.object(%{
+          data: Zoi.map(description: "Map of blackboard values to merge")
+        }),
+      doc: "Merge map values into the behavior tree blackboard",
+      name: "jido.bt.blackboard.merge"
+    },
+    @halt_action => %{
+      schema: Zoi.object(%{}),
+      doc: "Halt the behavior tree without ticking",
+      name: "jido.bt.halt"
+    },
+    @reset_action => %{
+      schema: Zoi.object(%{}),
+      doc: "Reset the behavior tree to initial blackboard and idle status",
+      name: "jido.bt.reset"
+    }
+  }
 
   defmodule State do
     @moduledoc """
@@ -61,6 +106,7 @@ defmodule Jido.Agent.Strategy.BehaviorTree do
               %{
                 tree: Zoi.any(description: "The behavior tree"),
                 blackboard: Zoi.any(description: "Shared blackboard state"),
+                initial_blackboard: Zoi.any(description: "Initial blackboard snapshot"),
                 status:
                   Zoi.atom(description: "Current execution status")
                   |> Zoi.default(:idle),
@@ -87,6 +133,7 @@ defmodule Jido.Agent.Strategy.BehaviorTree do
       %__MODULE__{
         tree: tree,
         blackboard: blackboard,
+        initial_blackboard: blackboard,
         status: :idle,
         tick_count: 0,
         last_result: nil,
@@ -96,8 +143,22 @@ defmodule Jido.Agent.Strategy.BehaviorTree do
   end
 
   @impl true
+  def action_spec(action), do: Map.get(@action_specs, action)
+
+  @impl true
+  def signal_routes(_ctx) do
+    [
+      {"jido.bt.tick", {:strategy_tick}},
+      {"jido.bt.blackboard.put", {:strategy_cmd, @put_action}},
+      {"jido.bt.blackboard.merge", {:strategy_cmd, @merge_action}},
+      {"jido.bt.halt", {:strategy_cmd, @halt_action}},
+      {"jido.bt.reset", {:strategy_cmd, @reset_action}}
+    ]
+  end
+
+  @impl true
   def init(%Agent{} = agent, ctx) do
-    JidoTelemetry.span_strategy(agent, :init, __MODULE__, fn ->
+    Observe.with_span([:jido, :agent, :strategy, :init], strategy_metadata(agent), fn ->
       opts = ctx[:strategy_opts] || []
 
       tree = resolve_tree(opts, agent)
@@ -117,62 +178,33 @@ defmodule Jido.Agent.Strategy.BehaviorTree do
 
   @impl true
   def cmd(%Agent{} = agent, instructions, ctx) when is_list(instructions) do
-    JidoTelemetry.span_strategy(agent, :cmd, __MODULE__, fn ->
+    Observe.with_span([:jido, :agent, :strategy, :cmd], strategy_metadata(agent), fn ->
       strat_state = StratState.get(agent, %{})
       %State{} = bt = Map.fetch!(strat_state, :bt)
       reset_on_completion? = Map.get(strat_state, :reset_on_completion, false)
 
-      blackboard =
-        bt.blackboard
-        |> Blackboard.put(:instructions, instructions)
-        |> Blackboard.put(:agent_state, agent.state)
+      {prepared_bt, pending_instructions, force_tick?} = prepare_commands(bt, instructions)
+      should_tick? = force_tick? or pending_instructions != [] or instructions == []
 
-      tick_context =
-        Map.merge(ctx, %{
-          agent_id: agent.id,
-          agent_module: agent.name,
-          strategy: __MODULE__
-        })
-
-      tick =
-        Tick.new_with_context(
-          blackboard,
-          agent,
-          [],
-          tick_context
-        )
-
-      {status, tree, tick} = Tree.tick_with_context(bt.tree, tick)
-
-      updated_agent = tick.agent
-      directives = tick.directives
-      last_result = Blackboard.get(tick.blackboard, :last_result)
-      error = Blackboard.get(tick.blackboard, :error)
-
-      tree =
-        if reset_on_completion? and status in [:success, :failure] do
-          Tree.halt(tree)
+      {updated_agent, updated_bt, directives} =
+        if should_tick? do
+          run_tree_tick(agent, prepared_bt, pending_instructions, ctx, reset_on_completion?)
         else
-          tree
+          {agent, prepared_bt, []}
         end
 
-      bt = %State{
-        bt
-        | tree: tree,
-          blackboard: tick.blackboard,
-          status: status,
-          tick_count: bt.tick_count + 1,
-          last_result: last_result,
-          error: error
-      }
-
-      updated_agent = StratState.put(updated_agent, %{strat_state | bt: bt})
+      updated_agent = StratState.put(updated_agent, %{strat_state | bt: updated_bt})
       {updated_agent, directives}
     end)
   rescue
     e ->
       error = Error.execution_error("BehaviorTree tick failed", %{reason: Exception.message(e)})
-      {agent, [%Directive.Error{error: error, context: :bt_tick}]}
+      {agent, [AgentDirective.error(error, :bt_tick)]}
+  end
+
+  @impl true
+  def tick(%Agent{} = agent, ctx) do
+    cmd(agent, [], ctx)
   end
 
   @impl true
@@ -182,7 +214,7 @@ defmodule Jido.Agent.Strategy.BehaviorTree do
 
     case bt do
       %State{} = state ->
-        status = state.status || :idle
+        status = normalize_snapshot_status(state.status)
 
         %Jido.Agent.Strategy.Snapshot{
           status: status,
@@ -203,6 +235,89 @@ defmodule Jido.Agent.Strategy.BehaviorTree do
           details: %{tick_count: 0, error: nil, tree_depth: 0}
         }
     end
+  end
+
+  defp prepare_commands(bt, instructions) do
+    Enum.reduce(instructions, {bt, [], false}, fn instruction, {acc_bt, pending, force_tick?} ->
+      case instruction do
+        %Instruction{action: @tick_action, params: params} ->
+          appended = pending ++ List.wrap(Map.get(params, :instructions, []))
+          {acc_bt, appended, true}
+
+        %Instruction{action: @put_action, params: %{key: key, value: value}} ->
+          updated_bb = Blackboard.put(acc_bt.blackboard, key, value)
+          {%{acc_bt | blackboard: updated_bb}, pending, force_tick?}
+
+        %Instruction{action: @merge_action, params: %{data: data}} when is_map(data) ->
+          updated_bb = Blackboard.merge(acc_bt.blackboard, data)
+          {%{acc_bt | blackboard: updated_bb}, pending, force_tick?}
+
+        %Instruction{action: @halt_action} ->
+          halted_tree = Tree.halt(acc_bt.tree)
+          {%{acc_bt | tree: halted_tree, status: :idle, error: nil}, pending, force_tick?}
+
+        %Instruction{action: @reset_action} ->
+          reset_tree = Tree.halt(acc_bt.tree)
+
+          {%{
+             acc_bt
+             | tree: reset_tree,
+               blackboard: acc_bt.initial_blackboard,
+               status: :idle,
+               last_result: nil,
+               error: nil
+           }, pending, force_tick?}
+
+        %Instruction{} = unhandled ->
+          {acc_bt, pending ++ [unhandled], true}
+
+        _ ->
+          {acc_bt, pending, force_tick?}
+      end
+    end)
+  end
+
+  defp run_tree_tick(agent, %State{} = bt, instructions, ctx, reset_on_completion?) do
+    blackboard =
+      bt.blackboard
+      |> Blackboard.put(:instructions, instructions)
+      |> Blackboard.put(:agent_state, agent.state)
+
+    tick_context =
+      Map.merge(ctx, %{
+        agent_id: agent.id,
+        agent_module: agent.agent_module || agent.__struct__,
+        strategy: __MODULE__
+      })
+
+    tick = Tick.new_with_context(blackboard, agent, [], tick_context)
+    tick = %{tick | sequence: bt.tick_count}
+    {status, tree, tick} = Tree.tick_with_context(bt.tree, tick)
+
+    updated_agent = tick.agent || agent
+    directives = tick.directives
+    last_result = Blackboard.get(tick.blackboard, :last_result)
+    tick_error = Blackboard.get(tick.blackboard, :error)
+    {snapshot_status, error} = normalize_status(status, tick_error)
+
+    tree =
+      if reset_on_completion? and snapshot_status in [:success, :failure] do
+        Tree.halt(tree)
+      else
+        tree
+      end
+
+    updated_bt = %State{
+      bt
+      | tree: tree,
+        blackboard: tick.blackboard,
+        status: snapshot_status,
+        tick_count: bt.tick_count + 1,
+        last_result: last_result,
+        error: error
+    }
+
+    {updated_agent, updated_bt, directives}
   end
 
   defp resolve_tree(opts, agent) do
@@ -234,4 +349,20 @@ defmodule Jido.Agent.Strategy.BehaviorTree do
   end
 
   defp safe_tree_depth(_), do: 0
+
+  defp strategy_metadata(%Agent{} = agent) do
+    %{
+      agent_id: agent.id,
+      strategy: __MODULE__
+    }
+  end
+
+  defp normalize_status(:success, error), do: {:success, error}
+  defp normalize_status(:running, error), do: {:running, error}
+  defp normalize_status(:failure, error), do: {:failure, error}
+  defp normalize_status({:error, reason}, nil), do: {:failure, reason}
+  defp normalize_status({:error, _reason}, error), do: {:failure, error}
+
+  defp normalize_snapshot_status(status) when status in [:idle, :running, :waiting, :success, :failure], do: status
+  defp normalize_snapshot_status(_status), do: :failure
 end

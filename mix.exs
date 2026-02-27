@@ -3,7 +3,7 @@ defmodule Jido.BehaviorTree.MixProject do
 
   @version "1.0.0"
   @source_url "https://github.com/agentjido/jido_behaviortree"
-  @description "[EXPERIMENTAL] Behavior Tree implementation for Jido agents with integrated action support. APIs may change without notice."
+  @description "Behavior Tree implementation for Jido agents with integrated action support."
 
   def vsn do
     @version
@@ -13,7 +13,7 @@ defmodule Jido.BehaviorTree.MixProject do
     [
       app: :jido_behaviortree,
       version: @version,
-      elixir: "~> 1.17",
+      elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
@@ -30,7 +30,7 @@ defmodule Jido.BehaviorTree.MixProject do
       # Coverage
       test_coverage: [
         tool: ExCoveralls,
-        summary: [threshold: 80],
+        summary: [threshold: 85],
         export: "cov"
       ],
 
@@ -46,12 +46,14 @@ defmodule Jido.BehaviorTree.MixProject do
     [
       preferred_envs: [
         coveralls: :test,
+        "coveralls.json": :test,
         "coveralls.github": :test,
         "coveralls.lcov": :test,
         "coveralls.detail": :test,
         "coveralls.post": :test,
         "coveralls.html": :test,
-        "coveralls.cobertura": :test
+        "coveralls.cobertura": :test,
+        "coverage.check": :test
       ]
     ]
   end
@@ -80,7 +82,8 @@ defmodule Jido.BehaviorTree.MixProject do
         {"CHANGELOG.md", title: "Changelog"},
         {"guides/getting-started.md", title: "Getting Started"},
         {"guides/nodes.md", title: "Node Reference"},
-        {"guides/custom-nodes.md", title: "Creating Custom Nodes"}
+        {"guides/custom-nodes.md", title: "Creating Custom Nodes"},
+        {"guides/migration.md", title: "Migration Guide"}
       ],
       extra_section: "Guides",
       groups_for_extras: [
@@ -126,7 +129,7 @@ defmodule Jido.BehaviorTree.MixProject do
 
   defp package do
     [
-      files: ["lib", "mix.exs", "README.md", "CHANGELOG.md", "usage-rules.md"],
+      files: ["lib", "guides", "mix.exs", "README.md", "CHANGELOG.md", "usage-rules.md", "LICENSE.md"],
       maintainers: ["Mike Hostetler"],
       licenses: ["Apache-2.0"],
       links: %{
@@ -142,35 +145,36 @@ defmodule Jido.BehaviorTree.MixProject do
   defp deps do
     [
       # Core dependencies
-      {:jido, "~> 2.0-rc.1", override: true},
+      {:jido, "~> 2.0"},
       {:telemetry, "~> 1.3"},
       {:jason, "~> 1.4"},
 
       # Development & Test Dependencies
-      {:credo, "~> 1.7", only: [:dev, :test]},
+      {:credo, "~> 1.7.16", only: [:dev, :test]},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.0", only: [:dev, :test], runtime: false},
       {:doctor, "~> 0.21", only: [:dev, :test], runtime: false},
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:ex_doc, "~> 0.40.1", only: :dev, runtime: false},
       {:excoveralls, "~> 0.18.3", only: [:dev, :test]},
       {:mix_test_watch, "~> 1.0", only: [:dev, :test], runtime: false},
       {:mimic, "~> 2.0", only: :test},
       {:stream_data, "~> 1.0", only: [:dev, :test]},
 
       # Zoi and Splode
-      {:zoi, "~> 0.14"},
+      {:zoi, "~> 0.17"},
       {:splode, "~> 0.3"},
 
       # Git tooling
       {:git_hooks, "~> 0.8", only: [:dev, :test], runtime: false},
-      {:git_ops, "~> 2.9", only: :dev, runtime: false}
+      {:git_ops, "~> 2.9.2", only: :dev, runtime: false}
     ]
   end
 
   defp aliases do
     [
       test: "test --exclude flaky",
-      docs: "docs -f html --open",
+      "coverage.check": ["coveralls.json", "run scripts/coverage_gate.exs"],
+      docs: "docs -f html",
       q: ["quality"],
       quality: [
         "format --check-formatted",

@@ -10,6 +10,8 @@ defmodule Jido.BehaviorTree.ErrorTest do
       assert %Error.BehaviorTreeError{} = error
       assert error.message == "invalid input"
       assert error.details.type == :validation
+      assert error.class == :invalid
+      assert error.splode == Error
     end
 
     test "includes additional details" do
@@ -27,6 +29,8 @@ defmodule Jido.BehaviorTree.ErrorTest do
       assert %Error.BehaviorTreeError{} = error
       assert error.message == "action failed"
       assert error.details.type == :execution
+      assert error.class == :execution
+      assert error.splode == Error
     end
   end
 
@@ -39,6 +43,8 @@ defmodule Jido.BehaviorTree.ErrorTest do
       assert error.details.type == :node
       assert error.details.node == MyNode
       assert error.details.tick_count == 5
+      assert error.class == :execution
+      assert error.splode == Error
     end
   end
 
@@ -54,6 +60,7 @@ defmodule Jido.BehaviorTree.ErrorTest do
 
       assert error.message == "Behavior tree error"
       assert error.details == %{}
+      assert error.class == :execution
     end
   end
 end

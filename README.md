@@ -93,6 +93,32 @@ value = BehaviorTree.Agent.get(agent, :result)
 BehaviorTree.Agent.set_mode(agent, :auto)
 ```
 
+### Jido AgentServer Strategy Integration
+
+For full Jido signal routing and directive execution, use the strategy with a
+`Jido.Agent` module and run it through `Jido.AgentServer`:
+
+```elixir
+defmodule MyApp.BTAgent do
+  use Jido.Agent,
+    name: "my_bt_agent",
+    strategy: {Jido.Agent.Strategy.BehaviorTree, tree: tree}
+end
+
+{:ok, pid} = Jido.AgentServer.start_link(agent: MyApp.BTAgent)
+
+# Route through strategy signal routes
+signal = Jido.Signal.new!("jido.bt.tick", %{}, source: "/myapp")
+{:ok, _agent} = Jido.AgentServer.call(pid, signal)
+```
+
+Built-in strategy signals:
+- `jido.bt.tick`
+- `jido.bt.blackboard.put`
+- `jido.bt.blackboard.merge`
+- `jido.bt.halt`
+- `jido.bt.reset`
+
 ## Node Types
 
 ### Composite Nodes
@@ -149,21 +175,33 @@ Every node returns one of these statuses:
 - `:success` - Node completed successfully
 - `:failure` - Node failed to complete
 - `:running` - Node is still executing (will be ticked again)
+- `{:error, reason}` - Node raised an execution error
 
 ## Telemetry
 
 The library emits telemetry events for monitoring:
 
-- `[:jido_behaviortree, :node, :tick, :start]` - Node tick started
-- `[:jido_behaviortree, :node, :tick, :stop]` - Node tick completed
-- `[:jido_behaviortree, :agent, :tick, :start]` - Agent tick started
-- `[:jido_behaviortree, :agent, :tick, :stop]` - Agent tick completed
+- `[:jido, :bt, :node, :tick, :start]` - Node tick started
+- `[:jido, :bt, :node, :tick, :stop]` - Node tick completed
+- `[:jido, :bt, :node, :tick, :exception]` - Node tick raised an exception
+- `[:jido, :bt, :agent, :tick, :start]` - Agent tick started
+- `[:jido, :bt, :agent, :tick, :stop]` - Agent tick completed
 
 ## Guides
 
 - [Getting Started](guides/getting-started.md) - Installation and basic usage
 - [Node Reference](guides/nodes.md) - Complete node documentation
 - [Creating Custom Nodes](guides/custom-nodes.md) - Build your own nodes with Zoi
+- [Migration Guide](guides/migration.md) - Upgrade notes for production semantics
+
+## Production Guarantees
+
+- Runtime support: Elixir `1.18+`, OTP `27/28`
+- Dependency baseline: stable Jido `2.0.x` stack from Hex
+- Coverage policy: `>=85%` overall with critical module gates
+- `Skill.run/3` returns `{:error, reason}` for tree `:failure`, timeouts, and execution errors
+- Blackboard updates from context-aware nodes (including `SetBlackboard`) persist through `Agent` ticks
+- Strategy snapshots always expose atom status values (`:idle`, `:running`, `:waiting`, `:success`, `:failure`)
 
 ## Development
 
@@ -188,7 +226,7 @@ This package integrates with the broader Jido ecosystem:
 
 ## License
 
-Apache 2.0 - See [LICENSE.md](LICENSE.md)
+Apache 2.0 - See [LICENSE.md](https://github.com/agentjido/jido_behaviortree/blob/main/LICENSE.md)
 
 ---
 

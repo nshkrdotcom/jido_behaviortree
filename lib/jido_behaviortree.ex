@@ -35,16 +35,17 @@ defmodule Jido.BehaviorTree do
 
   ### Status
 
-  Every node in a behavior tree returns one of three statuses:
+  Every node in a behavior tree returns one of these statuses:
   - `:success` - The node completed successfully
   - `:failure` - The node failed to complete
   - `:running` - The node is still executing
+  - `{:error, reason}` - The node encountered an execution error
 
   ### Nodes
 
   Behavior trees are composed of three types of nodes:
-  - **Composite Nodes**: Control the execution of child nodes (Sequence, Selector, Parallel)
-  - **Decorator Nodes**: Modify the behavior of a single child node (Inverter, Repeat, Timeout)
+  - **Composite Nodes**: Control the execution of child nodes (Sequence, Selector)
+  - **Decorator Nodes**: Modify the behavior of a single child node (Inverter, Succeeder, Failer, Repeat)
   - **Leaf Nodes**: Perform actual work (Action, Wait, SetBlackboard)
 
   ### Blackboard
@@ -69,19 +70,10 @@ defmodule Jido.BehaviorTree do
 
   ## Examples
 
-      iex> defmodule TestNode do
-      ...>   @schema Zoi.struct(__MODULE__, %{data: Zoi.any() |> Zoi.optional()}, coerce: true)
-      ...>   @type t :: unquote(Zoi.type_spec(@schema))
-      ...>   @enforce_keys Zoi.Struct.enforce_keys(@schema)
-      ...>   defstruct Zoi.Struct.struct_fields(@schema)
-      ...>   @behaviour Jido.BehaviorTree.Node
-      ...>   def tick(node_state, _tick), do: {:success, node_state}
-      ...>   def halt(node_state), do: node_state
-      ...> end
-      iex> root = %TestNode{data: "test"}
+      iex> root = Jido.BehaviorTree.Nodes.Wait.new(1)
       iex> tree = Jido.BehaviorTree.new(root)
-      iex> %Jido.BehaviorTree.Tree{} = tree
-      %Jido.BehaviorTree.Tree{root: %TestNode{data: "test"}}
+      iex> %Jido.BehaviorTree.Tree{root: %Jido.BehaviorTree.Nodes.Wait{duration_ms: 1}} = tree
+      %Jido.BehaviorTree.Tree{root: %Jido.BehaviorTree.Nodes.Wait{duration_ms: 1, start_time: nil}}
 
   """
   @spec new(Node.t()) :: Tree.t()

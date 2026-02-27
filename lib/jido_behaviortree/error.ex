@@ -11,7 +11,7 @@ defmodule Jido.BehaviorTree.Error do
       invalid: Invalid,
       execution: Execution
     ],
-    unknown_error: __MODULE__.UnknownError
+    unknown_error: Splode.Error.Unknown
 
   defmodule Invalid do
     @moduledoc "Invalid input/config error class"
@@ -25,52 +25,44 @@ defmodule Jido.BehaviorTree.Error do
 
   defmodule BehaviorTreeError do
     @moduledoc "General behavior tree error"
-    defexception [:message, :details]
+    use Splode.Error,
+      fields: [
+        message: "Behavior tree error",
+        details: %{}
+      ],
+      class: :execution
 
-    @type t :: %__MODULE__{message: String.t(), details: map()}
-
-    @impl true
-    def exception(opts) do
-      %__MODULE__{
-        message: Keyword.get(opts, :message, "Behavior tree error"),
-        details: Keyword.get(opts, :details, %{})
-      }
-    end
-  end
-
-  defmodule UnknownError do
-    @moduledoc "Unknown error"
-    defexception [:message, :details]
-
-    @type t :: %__MODULE__{message: String.t(), details: map()}
-
-    @impl true
-    def exception(opts) do
-      %__MODULE__{
-        message: Keyword.get(opts, :message, "Unknown error"),
-        details: Keyword.get(opts, :details, %{})
-      }
-    end
+    @type t :: %__MODULE__{
+            message: String.t(),
+            details: map(),
+            class: :invalid | :execution
+          }
   end
 
   @doc "Creates a validation error with the given message and optional details."
   @spec validation_error(String.t(), map()) :: BehaviorTreeError.t()
-  def validation_error(message, details \\ %{}) do
-    BehaviorTreeError.exception(message: message, details: Map.put(details, :type, :validation))
+  def validation_error(message, details \\ %{}) when is_map(details) do
+    build_error(message, Map.put(details, :type, :validation), :invalid)
   end
 
   @doc "Creates an execution error with the given message and optional details."
   @spec execution_error(String.t(), map()) :: BehaviorTreeError.t()
-  def execution_error(message, details \\ %{}) do
-    BehaviorTreeError.exception(message: message, details: Map.put(details, :type, :execution))
+  def execution_error(message, details \\ %{}) when is_map(details) do
+    build_error(message, Map.put(details, :type, :execution), :execution)
   end
 
   @doc "Creates a node-specific error with the given message, node module, and optional details."
   @spec node_error(String.t(), module(), map()) :: BehaviorTreeError.t()
-  def node_error(message, node_module, details \\ %{}) do
+  def node_error(message, node_module, details \\ %{}) when is_map(details) do
+    build_error(message, Map.merge(details, %{type: :node, node: node_module}), :execution)
+  end
+
+  defp build_error(message, details, class) do
     BehaviorTreeError.exception(
       message: message,
-      details: Map.merge(details, %{type: :node, node: node_module})
+      details: details,
+      class: class,
+      splode: __MODULE__
     )
   end
 end

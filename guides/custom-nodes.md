@@ -53,7 +53,7 @@ Called each time the node is executed.
 
 ```elixir
 @callback tick(node :: t(), tick :: Tick.t()) ::
-  {Node.status(), t()} | {{:error, term()}, t()}
+  {Jido.BehaviorTree.Status.t(), t()}
 ```
 
 **Parameters:**
@@ -64,7 +64,19 @@ Called each time the node is executed.
 - `{:success, updated_node}` - Node completed successfully
 - `{:failure, updated_node}` - Node failed
 - `{:running, updated_node}` - Node is still executing
-- `{{:error, reason}, updated_node}` - An error occurred
+- `{{:error, reason}, updated_node}` - An execution error occurred
+
+### `tick_with_context/2` (optional, recommended)
+
+If your node mutates tick context (blackboard, directives, agent state), implement:
+
+```elixir
+@spec tick_with_context(t(), Jido.BehaviorTree.Tick.t()) ::
+  {Jido.BehaviorTree.Status.t(), t(), Jido.BehaviorTree.Tick.t()}
+```
+
+This callback is used by `Tree.tick_with_context/2` and strategy/agent integrations
+to persist context changes through execution.
 
 ### `halt/1`
 

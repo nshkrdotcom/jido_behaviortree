@@ -76,6 +76,36 @@ defmodule Jido.BehaviorTree.Nodes.Repeat do
     end
   end
 
+  @doc """
+  Context-aware tick that preserves child tick mutations.
+  """
+  @spec tick_with_context(t(), Jido.BehaviorTree.Tick.t()) ::
+          {Jido.BehaviorTree.Status.t(), t(), Jido.BehaviorTree.Tick.t()}
+  def tick_with_context(%__MODULE__{child: child, count: count, current_iteration: iteration} = state, tick) do
+    {status, updated_child, updated_tick} = Node.execute_tick_with_context(child, tick)
+
+    case status do
+      :success ->
+        new_iteration = iteration + 1
+
+        if new_iteration >= count do
+          {:success, %{state | child: updated_child, current_iteration: 0}, updated_tick}
+        else
+          halted_child = Node.execute_halt(updated_child)
+          {:running, %{state | child: halted_child, current_iteration: new_iteration}, updated_tick}
+        end
+
+      :failure ->
+        {:failure, %{state | child: updated_child, current_iteration: 0}, updated_tick}
+
+      :running ->
+        {:running, %{state | child: updated_child}, updated_tick}
+
+      {:error, _} = error ->
+        {error, %{state | child: updated_child, current_iteration: 0}, updated_tick}
+    end
+  end
+
   @impl true
   def halt(%__MODULE__{child: child} = state) do
     halted_child = Node.execute_halt(child)

@@ -31,6 +31,36 @@ defmodule Jido.BehaviorTree.Nodes.ActionTest do
     end
   end
 
+  defmodule NonMapSuccessAction do
+    use Jido.Action,
+      name: "non_map_success_action",
+      description: "Returns a non-map success payload",
+      schema: []
+
+    @impl true
+    def run(_params, _context) do
+      {:ok, "done"}
+    end
+  end
+
+  defmodule NonMapEffectAction do
+    use Jido.Action,
+      name: "non_map_effect_action",
+      description: "Returns a non-map payload with state effects",
+      schema: []
+
+    @impl true
+    def run(_params, _context) do
+      {:ok, "done", [Jido.Agent.StateOp.set_state(%{status: :effect_applied})]}
+    end
+  end
+
+  defmodule ContextAgent do
+    use Jido.Agent,
+      name: "bt_action_context_agent",
+      schema: [status: [type: :atom, default: :idle]]
+  end
+
   describe "new/3" do
     test "creates an action node with module" do
       action = Action.new(SuccessAction)
@@ -80,6 +110,68 @@ defmodule Jido.BehaviorTree.Nodes.ActionTest do
 
       assert status == :success
       assert updated.result.input == "from blackboard"
+    end
+  end
+
+  describe "tick_with_context/2" do
+    test "returns success and updates tick when action succeeds" do
+      action = Action.new(SuccessAction, %{input: "hello"})
+      tick = Tick.new_with_context(Blackboard.new(), nil, [], %{})
+
+      {status, updated_node, updated_tick} = Action.tick_with_context(action, tick)
+
+      assert status == :success
+      assert updated_node.result == %{result: "success", input: "hello"}
+      assert Tick.get(updated_tick, :last_result) == %{result: "success", input: "hello"}
+    end
+
+    test "returns error status and stores reason in tick when action fails" do
+      action = Action.new(FailureAction)
+      tick = Tick.new_with_context(Blackboard.new(), nil, [], %{})
+
+      {status, _updated_node, updated_tick} = Action.tick_with_context(action, tick)
+
+      assert {:error, reason} = status
+      assert Tick.get(updated_tick, :error) == reason
+    end
+
+    test "uses same status class as tick/2 for failing actions" do
+      action = Action.new(FailureAction)
+      tick = Tick.new(Blackboard.new())
+
+      {tick_status, _} = Action.tick(action, tick)
+      {context_status, _, _} = Action.tick_with_context(action, Tick.new_with_context(Blackboard.new(), nil, [], %{}))
+
+      assert match?({:error, _}, tick_status)
+      assert match?({:error, _}, context_status)
+    end
+
+    test "treats non-map action outputs as errors in agent context mode" do
+      action = Action.new(NonMapSuccessAction)
+      agent = ContextAgent.new()
+      tick = Tick.new_with_context(Blackboard.new(), agent, [], %{})
+
+      {status, updated_node, updated_tick} = Action.tick_with_context(action, tick)
+
+      assert {:error, reason} = status
+      assert updated_node.result == nil
+      assert Tick.get(updated_tick, :error) == reason
+      assert %Jido.Agent{} = updated_tick.agent
+    end
+
+    test "keeps error class parity for non-map outputs in both tick modes" do
+      action = Action.new(NonMapEffectAction)
+      agent = ContextAgent.new()
+      bb = Blackboard.new()
+
+      {tick_status, _} = Action.tick(action, Tick.new(bb))
+
+      {context_status, _updated_node, updated_tick} =
+        Action.tick_with_context(action, Tick.new_with_context(bb, agent, [], %{}))
+
+      assert match?({:error, _}, tick_status)
+      assert match?({:error, _}, context_status)
+      assert Tick.get(updated_tick, :error) != nil
     end
   end
 
